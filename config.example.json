@@ -1,0 +1,7 @@
+{
+  "steam_path": "",
+  "auto_apply": true,
+  "poll_seconds": 2.0,
+  "start_minimized": false,
+  "close_to_tray": false
+}

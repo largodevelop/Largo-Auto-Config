@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# Local app data (do not publish user settings)
+config.json
+profiles/
+*.log
+
+# Build / packaging
+build/
+dist/
+*.spec
+.eggs/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
