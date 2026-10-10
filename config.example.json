@@ -1,7 +1,8 @@
 {
   "steam_path": "",
   "auto_apply": true,
-  "poll_seconds": 2.0,
+  "poll_seconds": 1.0,
+  "master_account_id": "",
   "start_minimized": false,
-  "close_to_tray": false
+  "close_to_tray": true
 }

@@ -37,9 +37,10 @@ def load_config() -> dict:
         "steam_path": "",
         "dota_path": "",
         "auto_apply": True,
-        "poll_seconds": 2.0,
+        "poll_seconds": 1.0,
+        "master_account_id": "",
         "start_minimized": False,
-        "close_to_tray": False,
+        "close_to_tray": True,
     }
 
 

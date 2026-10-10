@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import winreg
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,33 +67,39 @@ def read_login_users(steam: Path) -> list[SteamAccount]:
     return accounts
 
 
+def active_account_id() -> str | None:
+    """AccountID of the user logged in to the running Steam client (None if logged out)."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess") as key:
+            value, _ = winreg.QueryValueEx(key, "ActiveUser")
+    except OSError:
+        return None
+    return str(int(value)) if value else None
+
+
 def current_account(steam: Path) -> SteamAccount | None:
+    """Logged-in account (registry), falling back to MostRecent in loginusers.vdf."""
+    users = read_login_users(steam)
+    active = active_account_id()
+    if active:
+        for acc in users:
+            if acc.account_id == active:
+                return acc
+        sid = str(int(active) + STEAMID64_BASE)
+        return SteamAccount(sid, active, sid, "")
+
     path = steam / "config" / "loginusers.vdf"
     if not path.is_file():
         path = steam / "loginusers.vdf"
-    if not path.is_file():
-        return None
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return None
-
-    most_recent: SteamAccount | None = None
-    for u in _parse_vdf_users(text):
-        sid = u.get("SteamID64", "")
-        if not sid.isdigit():
-            continue
-        acc = SteamAccount(
-            steam_id64=sid,
-            account_id=steamid64_to_account_id(sid),
-            persona_name=u.get("PersonaName") or u.get("AccountName") or sid,
-            account_name=u.get("AccountName") or "",
-        )
-        if u.get("MostRecent") == "1":
+        return users[0] if users else None
+    recent = {u.get("SteamID64") for u in _parse_vdf_users(text) if u.get("MostRecent") == "1"}
+    for acc in users:
+        if acc.steam_id64 in recent:
             return acc
-        if most_recent is None:
-            most_recent = acc
-    return most_recent
+    return users[0] if users else None
 
 
 def loginusers_mtime(steam: Path) -> float:
