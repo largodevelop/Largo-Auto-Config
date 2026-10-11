@@ -16,6 +16,7 @@ import pystray
 
 import autostart
 from paths import APP_NAME, ensure_dirs, load_config, save_config, detect_steam_path
+from launch_options import apply_launch_options
 from profile_manager import (
     apply_autoexec,
     clear_autoexec,
@@ -25,7 +26,7 @@ from profile_manager import (
 )
 from steam_detect import SteamAccount, current_account, read_login_users
 from ui import AppWindow
-from watcher import AccountWatcher, is_dota_running
+from watcher import AccountWatcher, is_dota_running, is_steam_running
 from win_shell import claim_single_instance, start_activate_watcher, stop_activate_watcher
 
 
@@ -47,6 +48,7 @@ class App:
             on_toggle_autostart=self.on_toggle_autostart,
             on_set_master=self.on_set_master,
             on_pick_autoexec=self.on_pick_autoexec,
+            on_launch_options=self.on_launch_options,
             on_clear_autoexec=self.on_clear_autoexec,
             on_apply=lambda: self._sync_current("manual"),
             on_close=self.on_window_close,
@@ -55,6 +57,7 @@ class App:
         self.window.set_auto(self.auto_apply)
         self.window.set_autostart(autostart.is_enabled())
         self.window.set_autoexec(str(self.cfg.get("autoexec_name") or "") if has_autoexec() else "")
+        self.window.set_launch_options(str(self.cfg.get("launch_options") or ""))
         start_activate_watcher(lambda: self.window.after(0, self.window.show))
 
     def start(self) -> None:
@@ -208,27 +211,63 @@ class App:
         self.window.set_status(text, ok)
 
     def _sync_current(self, reason: str) -> None:
-        """Apply autoexec and pull hotkeys/settings from the master into the logged-in account."""
+        """Apply autoexec + launch options and pull hotkeys/settings from the master account."""
         manual = reason == "manual"
         if not self.steam or (not manual and not self.auto_apply):
             return
-        ae = self._apply_autoexec()
+        notes: list[str] = []
+        errors: list[str] = []
+        for note, err in (self._apply_autoexec(), self._apply_launch_options()):
+            if note:
+                notes.append(note)
+            if err:
+                errors.append(err)
         self._last_status = ("", True)
         if self._account:
             self._sync_settings(self._account, reason)
         text, ok = self._last_status
-        if ae:
-            self.window.set_status(f"{ae} · {text}" if text else ae, ok)
+        parts = errors + notes + ([text] if text else [])
+        if parts:
+            self.window.set_status(" · ".join(parts), ok and not errors)
 
-    def _apply_autoexec(self) -> str:
-        """Returns a short note if autoexec was written, '' otherwise."""
+    def _apply_autoexec(self) -> tuple[str, str]:
+        """Returns (note, error); note is set only if the live file was rewritten."""
         if not has_autoexec():
-            return ""
+            return "", ""
         try:
-            return "autoexec применён" if apply_autoexec(self.steam, self.cfg) else ""
+            return ("autoexec применён" if apply_autoexec(self.steam, self.cfg) else ""), ""
         except Exception as exc:
-            self._say(f"autoexec: {exc}", ok=False)
-            return ""
+            return "", f"autoexec: {exc}"
+
+    def _apply_launch_options(self) -> tuple[str, str]:
+        """Write Dota launch options into every account's localconfig.vdf Steam isn't holding."""
+        value = str(self.cfg.get("launch_options") or "").strip()
+        if not value or not self.steam:
+            return "", ""
+        try:
+            active = None
+            if is_steam_running():
+                acc = current_account(self.steam)
+                active = acc.account_id if acc else None
+            ids = [a.account_id for a in read_login_users(self.steam)]
+            changed, errors = apply_launch_options(self.steam, value, ids, skip=active)
+        except Exception as exc:
+            return "", f"параметры запуска: {exc}"
+        if errors:
+            return "", f"параметры запуска: {errors[0]}"
+        return (f"параметры запуска: {changed} акк." if changed else ""), ""
+
+    def on_launch_options(self, text: str) -> None:
+        text = text.strip()
+        if text == str(self.cfg.get("launch_options") or ""):
+            return
+        self.cfg["launch_options"] = text
+        save_config(self.cfg)
+        if not text:
+            self.window.set_status("параметры запуска очищены (в Steam не тронуты)")
+            return
+        note, err = self._apply_launch_options()
+        self.window.set_status(err or note or "параметры запуска сохранены", ok=not err)
 
     def on_pick_autoexec(self, path: str) -> None:
         try:

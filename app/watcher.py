@@ -27,6 +27,13 @@ def dota_pid() -> int | None:
     return None
 
 
+def is_steam_running() -> bool:
+    try:
+        return any((p.info.get("name") or "").lower() == "steam.exe" for p in psutil.process_iter(["name"]))
+    except (psutil.Error, OSError):
+        return False
+
+
 def _dota_running() -> bool:
     return dota_pid() is not None
 

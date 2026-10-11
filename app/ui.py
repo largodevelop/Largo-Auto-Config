@@ -18,6 +18,8 @@ from win_shell import hide_from_taskbar
 BG = "#0f0f0f"
 BG_RAISED = "#1c1c1c"
 BG_CARD = "#141415"
+BG_INPUT = "#262626"
+TEXT_MUTED = "#71717a"
 LINE = "#27272a"
 TEXT = "#f4f4f5"
 TEXT_SECONDARY = "#d4d4d8"
@@ -34,7 +36,7 @@ PRIMARY_TEXT = "#18181b"
 CLOSE_HOVER = "#c42b1c"
 
 WIDTH = 420
-HEIGHT = 434
+HEIGHT = 512
 PAD = 16
 RADIUS = 8
 RADIUS_SM = 6
@@ -252,6 +254,71 @@ class _FileCard(tk.Canvas):
             self.itemconfigure(self._value, text="выбрать или перетащить", fill=TEXT_MUTED_SM)
 
 
+class _EntryCard(tk.Canvas):
+    """Card with a caption and a single-line text field (commits on Enter / focus out)."""
+
+    HINT = "-novid -console +fps_max 144"
+
+    def __init__(
+        self, parent: tk.Widget, width: int, label: str, on_commit: Callable[[str], None], mono: str
+    ) -> None:
+        super().__init__(parent, width=width, height=68, bg=BG, highlightthickness=0, bd=0)
+        self._on_commit = on_commit
+        self._bg_img = _rounded(width, 68, RADIUS, BG_CARD, LINE)
+        self._field_img = _rounded(width - 20, 28, RADIUS_SM, BG_INPUT, LINE, bg=BG_CARD)
+        self.create_image(0, 0, image=self._bg_img, anchor="nw")
+        self.create_text(14, 17, text=label.upper(), anchor="w", fill=TEXT_MUTED_SM, font=(mono, 8))
+        self.create_image(10, 30, image=self._field_img, anchor="nw")
+        self._placeholder = True
+        self._entry = tk.Entry(
+            self,
+            bd=0,
+            relief="flat",
+            bg=BG_INPUT,
+            fg=TEXT_MUTED_SM,
+            insertbackground=TEXT,
+            selectbackground="#3f3f46",
+            selectforeground=TEXT,
+            highlightthickness=0,
+            font=(mono, 9),
+        )
+        self.create_window(18, 44, window=self._entry, anchor="w", width=width - 36, height=20)
+        self._show_hint()
+        self._entry.bind("<FocusIn>", self._focus_in)
+        self._entry.bind("<FocusOut>", self._focus_out)
+        self._entry.bind("<Return>", lambda _e: self._commit())
+
+    def _show_hint(self) -> None:
+        self._placeholder = True
+        self._entry.delete(0, "end")
+        self._entry.insert(0, self.HINT)
+        self._entry.configure(fg=TEXT_MUTED)
+
+    def _focus_in(self, _e=None) -> None:
+        if self._placeholder:
+            self._placeholder = False
+            self._entry.delete(0, "end")
+            self._entry.configure(fg=TEXT)
+
+    def _focus_out(self, _e=None) -> None:
+        self._commit()
+        if not self._entry.get().strip():
+            self._show_hint()
+
+    def _commit(self) -> None:
+        if not self._placeholder:
+            self._on_commit(self._entry.get().strip())
+
+    def set(self, text: str) -> None:
+        if text:
+            self._placeholder = False
+            self._entry.delete(0, "end")
+            self._entry.insert(0, text)
+            self._entry.configure(fg=TEXT)
+        else:
+            self._show_hint()
+
+
 class AppWindow:
     def __init__(
         self,
@@ -260,6 +327,7 @@ class AppWindow:
         on_set_master: Callable[[], None],
         on_pick_autoexec: Callable[[str], None],
         on_clear_autoexec: Callable[[], None],
+        on_launch_options: Callable[[str], None],
         on_apply: Callable[[], None],
         on_close: Callable[[], None],
         on_minimize: Callable[[], None],
@@ -269,6 +337,7 @@ class AppWindow:
         self._on_set_master = on_set_master
         self._on_pick_autoexec = on_pick_autoexec
         self._on_clear_autoexec = on_clear_autoexec
+        self._on_launch_options = on_launch_options
         self._on_apply = on_apply
         self._on_close = on_close
         self._on_minimize = on_minimize
@@ -357,7 +426,17 @@ class AppWindow:
         self._autoexec_card = _FileCard(
             body, inner_w, "Autoexec CFG", self._pick_autoexec, self._on_clear_autoexec, self._sans, self._mono
         )
-        self._autoexec_card.pack(pady=(0, 14))
+        self._autoexec_card.pack(pady=(0, 8))
+        self._launch_card = _EntryCard(
+            body, inner_w, "Параметры запуска Dota", self._on_launch_options, self._mono
+        )
+        self._launch_card.pack(pady=(0, 14))
+        HoverTip(
+            self._launch_card,
+            "Параметры запуска Dota 2 из Steam (-novid, -console, +exec ...). "
+            "Применяются ко всем аккаунтам на этом ПК. Для текущего аккаунта подставятся "
+            "после смены аккаунта или перезапуска Steam. Enter — сохранить.",
+        )
         HoverTip(
             self._autoexec_card,
             "Нажми или перетащи сюда свой autoexec .cfg. Он будет записываться в Dota "
@@ -438,6 +517,9 @@ class AppWindow:
     def set_autostart(self, enabled: bool) -> None:
         self._autostart = enabled
         self._autostart_toggle.set(enabled)
+
+    def set_launch_options(self, text: str) -> None:
+        self._launch_card.set(text)
 
     def set_autoexec(self, name: str) -> None:
         self._autoexec_card.set(name)
