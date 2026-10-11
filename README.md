@@ -1,6 +1,6 @@
 # Largo Auto Config
 
-Трей-приложение от **Largo Develop**: один общий профиль CFG + настроек Dota 2, который подставляется при смене Steam-аккаунта.
+Трей-приложение от **Largo Develop**: хоткеи и настройки Dota 2 с главного аккаунта автоматически переносятся на любой Steam-аккаунт, на который вы переключаетесь. Плюс общий autoexec и параметры запуска.
 
 <p align="center"><img src="docs/screenshot.png" alt="Largo Auto Config" width="420"></p>
 
