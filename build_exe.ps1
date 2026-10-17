@@ -4,12 +4,17 @@ Set-Location $PSScriptRoot
 
 python -m pip install -q -r requirements.txt pyinstaller
 
+# Свойства файла (издатель, версия, описание) внутри exe: без них Защитник чаще считает файл подозрительным
+python make_version_info.py
+
 $assets = "assets;assets"
 $defaults = "defaults;defaults"
 
 python -m PyInstaller `
   --noconfirm `
   --clean `
+  --noupx `
+  --version-file "version_info.txt" `
   --onefile `
   --windowed `
   --name "LargoAutoConfig" `

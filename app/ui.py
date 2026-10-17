@@ -44,7 +44,7 @@ RADIUS_SM = 6
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "assets"
 LOGO_ON = ASSETS / "brand_icon.png"
 LOGO_OFF = ASSETS / "brand_off.png"
-LOGO_SIZE = 20
+LOGO_SIZE = 30
 
 
 def _rgb(hex_color: str) -> tuple[int, int, int]:
@@ -331,7 +331,11 @@ class AppWindow:
         on_apply: Callable[[], None],
         on_close: Callable[[], None],
         on_minimize: Callable[[], None],
+        on_update: Callable[[], None] | None = None,
     ) -> None:
+        self._on_update = on_update
+        self._update_btn: tk.Label | None = None
+        self._update_pulse = 0
         self._on_toggle_auto = on_toggle_auto
         self._on_toggle_autostart = on_toggle_autostart
         self._on_set_master = on_set_master
@@ -392,6 +396,10 @@ class AppWindow:
         controls.pack(side="right")
         self._mk_win_btn(controls, "—", self._on_minimize).pack(side="left")
         self._mk_win_btn(controls, "×", self._on_close, close=True).pack(side="left")
+        # значок обновления: появляется, когда на GitHub вышла новая версия
+        self._update_btn = tk.Label(bar, text="↑", bg=BG, fg=ACCENT, font=("Segoe UI Semibold", 12), cursor="hand2", padx=10)
+        self._update_btn.bind("<Button-1>", lambda _e: self._on_update and self._on_update())
+        self._update_tip = HoverTip(self._update_btn, "Доступно обновление")
         tk.Frame(parent, bg=LINE, height=1).pack(fill="x")
 
     def _mk_win_btn(self, parent: tk.Frame, text: str, command, close: bool = False) -> tk.Label:
@@ -498,6 +506,27 @@ class AppWindow:
         self._on_toggle_autostart(self._autostart)
 
     # ---- API used by main --------------------------------------------------
+
+    def set_update(self, latest: str | None) -> None:
+        """Show the update arrow (with the new version in its hint) or hide it."""
+        btn = self._update_btn
+        if btn is None:
+            return
+        if latest:
+            self._update_tip._text = f"Доступно обновление {latest}: нажмите, чтобы установить"
+            if not btn.winfo_ismapped():
+                btn.pack(side="right")
+                self._pulse_update()
+        else:
+            btn.pack_forget()
+
+    def _pulse_update(self) -> None:
+        btn = self._update_btn
+        if btn is None or not btn.winfo_ismapped():
+            return
+        self._update_pulse = (self._update_pulse + 1) % 2
+        btn.configure(fg=ACCENT if self._update_pulse else "#3f8f6c")
+        btn.after(900, self._pulse_update)
 
     def set_account(self, name: str, account_id: str = "") -> None:
         self._account_card.set(name, LAMP_ONLINE if account_id else LAMP_OFF)

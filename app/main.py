@@ -15,6 +15,8 @@ from PIL import Image, ImageDraw
 import pystray
 
 import autostart
+import updater
+import version
 from paths import APP_NAME, ensure_dirs, load_config, save_config, detect_steam_path
 from launch_options import apply_launch_options
 from profile_manager import (
@@ -53,7 +55,10 @@ class App:
             on_apply=lambda: self._sync_current("manual"),
             on_close=self.on_window_close,
             on_minimize=self.hide_to_tray,
+            on_update=self.install_update,
         )
+        self._update_info: dict | None = None
+        self._updating = False
         self.window.set_auto(self.auto_apply)
         self.window.set_autostart(autostart.is_enabled())
         self.window.set_autoexec(str(self.cfg.get("autoexec_name") or "") if has_autoexec() else "")
@@ -77,6 +82,7 @@ class App:
             self._watcher.start()
 
         self._start_tray()
+        threading.Thread(target=self._update_loop, name="largo-update", daemon=True).start()
         if self.cfg.get("start_minimized"):
             self.window.hide()
         self.window.run()
@@ -105,6 +111,11 @@ class App:
         menu = pystray.Menu(
             pystray.MenuItem("Открыть", self._tray_show, default=True),
             pystray.MenuItem("Применить сейчас", self._tray_sync),
+            pystray.MenuItem(
+                lambda item: f"Обновить до {(self._update_info or {}).get('latest', '')}",
+                lambda icon, item: self.window.after(0, self.install_update),
+                visible=lambda item: bool(self._update_info),
+            ),
             pystray.MenuItem(
                 "Автозапуск с Windows",
                 self._tray_toggle_autostart,
@@ -139,6 +150,54 @@ class App:
             self.hide_to_tray()
         else:
             self.quit()
+
+    # ---- auto-update ------------------------------------------------------
+
+    def _update_loop(self) -> None:
+        import time
+
+        time.sleep(5)
+        while True:
+            try:
+                info = updater.check_for_update()
+                if info.get("available"):
+                    self._update_info = info
+                    self.window.after(0, lambda: self.window.set_update(info.get("latest")))
+                elif not self._updating:
+                    self._update_info = None
+                    self.window.after(0, lambda: self.window.set_update(None))
+            except Exception:
+                pass
+            time.sleep(5 * 60)
+
+    def install_update(self) -> None:
+        info = self._update_info
+        if not info or self._updating:
+            return
+        if not getattr(sys, "frozen", False):
+            self._say("автообновление работает в собранном приложении", ok=False)
+            return
+        self._updating = True
+        self._say(f"скачиваю {info.get('latest')}…")
+
+        def work() -> None:
+            try:
+                path = updater.download_asset(
+                    info["url"],
+                    updater.staged_path(),
+                    int(info.get("size") or 0),
+                    on_progress=lambda done, total: self.window.after(
+                        0, lambda: self._say(f"скачиваю {info.get('latest')}: {int(done * 100 / total) if total else 0}%")
+                    ),
+                )
+                updater.stage_restart(path)
+            except Exception as exc:
+                self._updating = False
+                self.window.after(0, lambda: self._say(f"обновление не удалось: {exc}", ok=False))
+                return
+            self.window.after(0, self.quit)
+
+        threading.Thread(target=work, name="largo-install-update", daemon=True).start()
 
     def quit(self) -> None:
         stop_activate_watcher()
@@ -320,6 +379,9 @@ class App:
 
 
 def main() -> None:
+    if updater.apply_mode(sys.argv):
+        return
+    updater.cleanup_staged()
     if not claim_single_instance():
         return
     App().start()
