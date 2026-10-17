@@ -159,7 +159,7 @@ class _Splash:
                 style.theme_use("clam")
             except tk.TclError:
                 pass
-            style.configure("L.Horizontal.TProgressbar", troughcolor="#2a2a2e", background="#7fdaac", bordercolor="#18181b", lightcolor="#7fdaac", darkcolor="#7fdaac")
+            style.configure("L.Horizontal.TProgressbar", troughcolor="#2a2a2e", background="#a58cf8", bordercolor="#18181b", lightcolor="#a58cf8", darkcolor="#a58cf8")
             bar = ttk.Progressbar(root, style="L.Horizontal.TProgressbar", mode="indeterminate", length=260)
             bar.pack(pady=12)
             bar.start(18)

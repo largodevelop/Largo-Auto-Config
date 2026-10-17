@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from pathlib import Path
@@ -15,6 +16,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 import autostart
+import grid_manager
 import updater
 import version
 from paths import APP_NAME, ensure_dirs, load_config, save_config, detect_steam_path
@@ -56,6 +58,10 @@ class App:
             on_close=self.on_window_close,
             on_minimize=self.hide_to_tray,
             on_update=self.install_update,
+            on_pick_grid=self.on_pick_grid,
+            on_add_grid=self.on_add_grid,
+            on_delete_grid=self.on_delete_grid,
+            on_launch_dota=self.on_launch_dota,
         )
         self._update_info: dict | None = None
         self._updating = False
@@ -63,6 +69,7 @@ class App:
         self.window.set_autostart(autostart.is_enabled())
         self.window.set_autoexec(str(self.cfg.get("autoexec_name") or "") if has_autoexec() else "")
         self.window.set_launch_options(str(self.cfg.get("launch_options") or ""))
+        self._show_grids()
         start_activate_watcher(lambda: self.window.after(0, self.window.show))
 
     def start(self) -> None:
@@ -156,10 +163,17 @@ class App:
     def _update_loop(self) -> None:
         import time
 
+        self.window.after(0, lambda: self.window.set_idle("Проверяю обновления…"))
         time.sleep(5)
         while True:
             try:
                 info = updater.check_for_update()
+                if info.get("error"):
+                    self.window.after(0, lambda: self.window.set_idle("Не удалось проверить обновления"))
+                elif info.get("available"):
+                    self.window.after(0, lambda: self.window.set_idle(f"Доступно обновление {info.get('latest')}"))
+                else:
+                    self.window.after(0, lambda: self.window.set_idle("Последняя версия установлена, обновления не найдены"))
                 if info.get("available"):
                     self._update_info = info
                     self.window.after(0, lambda: self.window.set_update(info.get("latest")))
@@ -200,6 +214,7 @@ class App:
         threading.Thread(target=work, name="largo-install-update", daemon=True).start()
 
     def quit(self) -> None:
+        self._harvest_grid(self._account)
         stop_activate_watcher()
         if self._watcher:
             self._watcher.stop()
@@ -254,6 +269,7 @@ class App:
         self.window.set_master(master)
 
     def _on_account_change(self, acc: SteamAccount | None) -> None:
+        self._harvest_grid(self._account)  # take the grid edits from the account we are leaving
         self._account = acc
         self._show_accounts()
         if acc:
@@ -262,6 +278,7 @@ class App:
             self.window.set_status("нет аккаунта", ok=False)
 
     def _on_dota_stop(self) -> None:
+        self._harvest_grid(self._account)
         if self._pending_sync:
             self._sync_current("dota-stop")
 
@@ -276,7 +293,7 @@ class App:
             return
         notes: list[str] = []
         errors: list[str] = []
-        for note, err in (self._apply_autoexec(), self._apply_launch_options()):
+        for note, err in (self._apply_autoexec(), self._apply_launch_options(), self._apply_grid()):
             if note:
                 notes.append(note)
             if err:
@@ -288,6 +305,109 @@ class App:
         parts = errors + notes + ([text] if text else [])
         if parts:
             self.window.set_status(" · ".join(parts), ok and not errors)
+
+    # ---- hero grids --------------------------------------------------------
+
+    def _grid_name(self) -> str:
+        name = str(self.cfg.get("grid_name") or "")
+        return name if name and grid_manager.load_grid(name) else ""
+
+    def _show_grids(self) -> None:
+        self.window.set_grids(grid_manager.list_grids(), self._grid_name())
+
+    def _harvest_grid(self, acc: SteamAccount | None) -> None:
+        """Save the heroes the player moved in the grid on this account into our copy."""
+        name = self._grid_name()
+        if not (name and acc and self.steam) or is_dota_running():
+            return
+        applied = self.cfg.setdefault("grid_applied", {})
+        try:
+            fresh = grid_manager.harvest_grid(self.steam, acc.account_id, name, applied.get(acc.account_id))
+        except Exception:
+            return
+        if fresh:
+            applied[acc.account_id] = fresh
+            save_config(self.cfg)
+
+    def _apply_grid(self) -> tuple[str, str]:
+        """Put the chosen grid into the current account. Returns (note, error)."""
+        name = self._grid_name()
+        if not (name and self._account and self.steam):
+            return "", ""
+        if is_dota_running():
+            self._pending_sync = True
+            return "", ""
+        applied = self.cfg.setdefault("grid_applied", {})
+        try:
+            fresh = grid_manager.apply_grid(self.steam, self._account.account_id, name)
+        except Exception as exc:
+            return "", f"сетка: {exc}"
+        if fresh and applied.get(self._account.account_id) != fresh:
+            applied[self._account.account_id] = fresh
+            save_config(self.cfg)
+            return f"сетка «{name}» применена", ""
+        return "", ""
+
+    def on_pick_grid(self, name: str) -> None:
+        self.cfg["grid_name"] = name
+        save_config(self.cfg)
+        self._show_grids()
+        if not name:
+            self.window.set_status("сетка не меняется (в играх остаётся как есть)")
+            return
+        note, err = self._apply_grid()
+        if is_dota_running():
+            self.window.set_status(f"сетка «{name}» применится после закрытия Dota", ok=False)
+        else:
+            self.window.set_status(err or note or f"сетка «{name}» выбрана", ok=not err)
+
+    def on_add_grid(self, path: str) -> None:
+        try:
+            names = grid_manager.import_file(Path(path))
+        except (OSError, ValueError) as exc:
+            self.window.set_status(f"сетка: {exc}", ok=False)
+            return
+        # a re-imported grid is a fresh copy: accounts must take it again
+        for key in [k for k in (self.cfg.get("grid_applied") or {})]:
+            self.cfg["grid_applied"].pop(key, None)
+        self.cfg["grid_name"] = names[0]
+        save_config(self.cfg)
+        self._show_grids()
+        note, err = self._apply_grid()
+        extra = f" (+{len(names) - 1} в списке)" if len(names) > 1 else ""
+        if is_dota_running():
+            self.window.set_status(f"сетка «{names[0]}» добавлена, применится после закрытия Dota{extra}")
+        else:
+            self.window.set_status(err or f"сетка «{names[0]}» добавлена и выбрана{extra}", ok=not err)
+
+    def on_launch_dota(self) -> None:
+        if is_dota_running():
+            self.window.set_status("Dota уже запущена", ok=False)
+            return
+        self._sync_current("manual")
+        try:
+            os.startfile("steam://rungameid/570")
+        except OSError as exc:
+            self.window.set_status(f"не удалось запустить Dota: {exc}", ok=False)
+            return
+        self.window.set_status("запускаю Dota 2…")
+
+    def on_delete_grid(self, name: str) -> None:
+        bundled = grid_manager.is_bundled(name)
+        grid_manager.delete_grid(name)
+        for path in (grid_manager.GRIDS_DIR / "previews").glob("*.jpg") if (grid_manager.GRIDS_DIR / "previews").is_dir() else []:
+            path.unlink(missing_ok=True)
+        if self.cfg.get("grid_name") == name and not bundled:
+            self.cfg["grid_name"] = ""
+        if bundled:
+            (self.cfg.get("grid_applied") or {}).clear()  # accounts take the original again
+        save_config(self.cfg)
+        self._show_grids()
+        if bundled:
+            self._apply_grid()
+            self.window.set_status(f"сетка «{name}» возвращена к исходной")
+        else:
+            self.window.set_status(f"сетка «{name}» убрана из списка (в играх не тронута)")
 
     def _apply_autoexec(self) -> tuple[str, str]:
         """Returns (note, error); note is set only if the live file was rewritten."""
@@ -375,7 +495,7 @@ class App:
         elif res.changed:
             self._say(f"применено файлов: {len(res.changed)}")
         else:
-            self._say("уже актуально")
+            self._say("")  # the status line then shows the update-check result
 
 
 def main() -> None:

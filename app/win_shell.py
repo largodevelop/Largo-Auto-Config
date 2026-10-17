@@ -39,6 +39,41 @@ def _hwnd_from_tk(root) -> int:
     return int(hwnd or wid)
 
 
+def enable_glass(root, tint: int = 0x0F0F0F, opacity: int = 0x99, blur: bool = True) -> bool:
+    """Frosted dark glass: blur of whatever is behind the window (Windows 10/11 acrylic)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        hwnd = _hwnd_from_tk(root)
+
+        class AccentPolicy(ctypes.Structure):
+            _fields_ = [("AccentState", ctypes.c_int), ("AccentFlags", ctypes.c_int),
+                        ("GradientColor", ctypes.c_uint), ("AnimationId", ctypes.c_int)]
+
+        class WinCompAttr(ctypes.Structure):
+            _fields_ = [("Attribute", ctypes.c_int), ("Data", ctypes.c_void_p), ("SizeOfData", ctypes.c_size_t)]
+
+        r, g, b = (tint >> 16) & 0xFF, (tint >> 8) & 0xFF, tint & 0xFF
+        policy = AccentPolicy(4 if blur else 2, 2 if blur else 0, (opacity << 24) | (b << 16) | (g << 8) | r, 0)  # 4 = acrylic blur, 2 = plain tint (used while dragging: blur makes the move laggy)
+        data = WinCompAttr(19, ctypes.cast(ctypes.pointer(policy), ctypes.c_void_p), ctypes.sizeof(policy))
+        return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
+    except (OSError, AttributeError):
+        return False
+
+
+def window_origin(root) -> tuple[int, int]:
+    """Real top-left corner of the window on screen (Tk's own idea of it can go stale after the window was moved)."""
+    try:
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if ctypes.windll.user32.GetWindowRect(_hwnd_from_tk(root), ctypes.byref(rect)):
+            return int(rect.left), int(rect.top)
+    except (OSError, AttributeError):
+        pass
+    return int(root.winfo_rootx()), int(root.winfo_rooty())
+
+
 def set_app_id(app_user_model_id: str = APP_USER_MODEL_ID) -> None:
     if sys.platform != "win32":
         return

@@ -12,12 +12,15 @@ from pathlib import Path
 import windnd
 from PIL import Image, ImageDraw, ImageTk
 
-from win_shell import hide_from_taskbar
+import grid_manager
+import version
+from win_shell import enable_glass, hide_from_taskbar, window_origin
 
 # Design tokens (Largo CRM)
-BG = "#0f0f0f"
+BG = "#010101"  # colour key: Tk paints it, Windows makes it see-through glass (see win_shell.enable_glass)
 BG_RAISED = "#1c1c1c"
-BG_CARD = "#141415"
+BG_CARD = "#181819"
+BAR_BG = "#0d0d0d"  # title bar stays solid: click-through glass pixels could not be grabbed to drag the window
 BG_INPUT = "#262626"
 TEXT_MUTED = "#71717a"
 LINE = "#27272a"
@@ -25,7 +28,7 @@ TEXT = "#f4f4f5"
 TEXT_SECONDARY = "#d4d4d8"
 TEXT_DIM = "#a1a1aa"
 TEXT_MUTED_SM = "#9a9aa2"
-ACCENT = "#7fdaac"
+ACCENT = "#a58cf8"
 DANGER = "#ff6b6b"
 LAMP_ONLINE = "#5b9ee6"
 LAMP_OFF = "#3a3a3a"
@@ -36,10 +39,10 @@ PRIMARY_TEXT = "#18181b"
 CLOSE_HOVER = "#c42b1c"
 
 WIDTH = 420
-HEIGHT = 512
+HEIGHT = 520
 PAD = 16
-RADIUS = 8
-RADIUS_SM = 6
+RADIUS = 18
+RADIUS_SM = 14
 
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "assets"
 LOGO_ON = ASSETS / "brand_icon.png"
@@ -97,7 +100,7 @@ def _logo(path: Path) -> ImageTk.PhotoImage | None:
     if not path.is_file():
         return None
     img = Image.open(path).convert("RGBA").resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (LOGO_SIZE, LOGO_SIZE), BG)
+    canvas = Image.new("RGBA", (LOGO_SIZE, LOGO_SIZE), BAR_BG)
     canvas.alpha_composite(img)
     return ImageTk.PhotoImage(canvas.convert("RGB"))
 
@@ -166,7 +169,7 @@ class _Card(tk.Canvas):
 
     def __init__(self, parent: tk.Widget, width: int, label: str, mono: str) -> None:
         super().__init__(parent, width=width, height=56, bg=BG, highlightthickness=0, bd=0)
-        self._bg_img = _rounded(width, 56, RADIUS, BG_CARD, LINE)
+        self._bg_img = _rounded(width, 56, RADIUS, BG_CARD)
         self._lamps = {c: _lamp(c, BG_CARD) for c in (LAMP_ONLINE, ACCENT, LAMP_OFF)}
         self.create_image(0, 0, image=self._bg_img, anchor="nw")
         self.create_text(14, 17, text=label.upper(), anchor="w", fill=TEXT_MUTED_SM, font=(mono, 8))
@@ -181,16 +184,16 @@ class _Card(tk.Canvas):
 class _Button(tk.Canvas):
     """Rounded button: 'primary' (light) or outlined ghost."""
 
-    def __init__(self, parent: tk.Widget, text: str, command: Callable[[], None], font: tuple, primary: bool) -> None:
+    def __init__(self, parent: tk.Widget, text: str, command: Callable[[], None], font: tuple, primary: bool, bg: str = BG) -> None:
         w, h = tkfont.Font(font=font).measure(text) + 28, 28
-        super().__init__(parent, width=w, height=h, bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        super().__init__(parent, width=w, height=h, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
         if primary:
-            idle = _rounded(w, h, RADIUS_SM, PRIMARY)
-            hover = _rounded(w, h, RADIUS_SM, PRIMARY_HOVER)
+            idle = _rounded(w, h, RADIUS_SM, PRIMARY, bg=bg)
+            hover = _rounded(w, h, RADIUS_SM, PRIMARY_HOVER, bg=bg)
             self._fg = (PRIMARY_TEXT, PRIMARY_TEXT)
         else:
-            idle = _rounded(w, h, RADIUS_SM, BG, LINE)
-            hover = _rounded(w, h, RADIUS_SM, BG_RAISED, "#3f3f46")
+            idle = _rounded(w, h, RADIUS_SM, BG_CARD, bg=bg)
+            hover = _rounded(w, h, RADIUS_SM, "#262628", bg=bg)
             self._fg = (TEXT_DIM, TEXT)
         self._imgs = (idle, hover)
         self._bg_item = self.create_image(0, 0, image=idle, anchor="nw")
@@ -209,7 +212,7 @@ class _ToggleCard(tk.Canvas):
 
     def __init__(self, parent: tk.Widget, width: int, label: str, command: Callable[[], None], sans: str) -> None:
         super().__init__(parent, width=width, height=44, bg=BG, highlightthickness=0, bd=0, cursor="hand2")
-        self._bg_img = _rounded(width, 44, RADIUS, BG_CARD, LINE)
+        self._bg_img = _rounded(width, 44, RADIUS, BG_CARD)
         self._on = _switch(True, BG_CARD)
         self._off = _switch(False, BG_CARD)
         self.create_image(0, 0, image=self._bg_img, anchor="nw")
@@ -235,8 +238,8 @@ class _FileCard(tk.Canvas):
         mono: str,
     ) -> None:
         super().__init__(parent, width=width, height=44, bg=BG, highlightthickness=0, bd=0, cursor="hand2")
-        self._idle = _rounded(width, 44, RADIUS, BG_CARD, LINE)
-        self._hover = _rounded(width, 44, RADIUS, BG_CARD, "#3f3f46")
+        self._idle = _rounded(width, 44, RADIUS, BG_CARD)
+        self._hover = _rounded(width, 44, RADIUS, "#212123")
         self._bg_item = self.create_image(0, 0, image=self._idle, anchor="nw")
         self.create_text(14, 22, text=label, anchor="w", fill=TEXT_SECONDARY, font=(sans, 10))
         self._value = self.create_text(width - 14, 22, text="", anchor="e", fill=TEXT_MUTED_SM, font=(mono, 9))
@@ -254,6 +257,155 @@ class _FileCard(tk.Canvas):
             self.itemconfigure(self._value, text="выбрать или перетащить", fill=TEXT_MUTED_SM)
 
 
+class _Pill(tk.Canvas):
+    """Rounded pill button with its own colours; text can change (selected / not selected)."""
+
+    def __init__(self, parent, text, command, font, width, height=32, fill=BG_CARD, hover="#262628",
+                 fg=TEXT_DIM, fg_hover=TEXT, outline=None, bg=BG) -> None:
+        super().__init__(parent, width=width, height=height, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        self._w_px, self._h_px = width, height
+        self._colors = (fill, hover, fg, fg_hover, outline, bg)
+        self._imgs: dict = {}
+        self._bg_item = self.create_image(0, 0, anchor="nw")
+        self._label = self.create_text(width // 2, height // 2, text=text, font=font)
+        self._state = 0
+        self.bind("<Enter>", lambda _e: self._paint(1))
+        self.bind("<Leave>", lambda _e: self._paint(0))
+        self.bind("<Button-1>", lambda _e: command())
+        self.style(fill, hover, fg, fg_hover, outline)
+
+    def style(self, fill, hover, fg, fg_hover, outline=None) -> None:
+        bg = self._colors[5]
+        self._colors = (fill, hover, fg, fg_hover, outline, bg)
+        self._imgs = {
+            0: _rounded(self._w_px, self._h_px, self._h_px // 2, fill, outline, bg=bg),
+            1: _rounded(self._w_px, self._h_px, self._h_px // 2, hover, outline, bg=bg),
+        }
+        self._paint(self._state)
+
+    def set_text(self, text: str) -> None:
+        self.itemconfigure(self._label, text=text)
+
+    def _paint(self, state: int) -> None:
+        self._state = state
+        self.itemconfigure(self._bg_item, image=self._imgs[state])
+        self.itemconfigure(self._label, fill=self._colors[3] if state else self._colors[2])
+
+
+class _Tabs(tk.Canvas):
+    """Segmented pill with the section names; the active one is tinted with the accent."""
+
+    TRACK = "#0e0e10"
+    ACTIVE = "#2b2547"
+
+    def __init__(self, parent, width, names, on_change, font) -> None:
+        super().__init__(parent, width=width, height=36, bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        self._names, self._on_change, self._font = names, on_change, font
+        self._seg = (width - 8) / len(names)
+        self._track = _rounded(width, 36, 18, self.TRACK)
+        self._active = _rounded(int(self._seg), 28, 14, self.ACTIVE, bg=self.TRACK)
+        self._index = 0
+        self.bind("<Button-1>", self._click)
+        self._draw()
+
+    def _draw(self) -> None:
+        self.delete("all")
+        self.create_image(0, 0, image=self._track, anchor="nw")
+        for i, name in enumerate(self._names):
+            x0 = 4 + i * self._seg
+            if i == self._index:
+                self.create_image(x0, 4, image=self._active, anchor="nw")
+            self.create_text(
+                x0 + self._seg / 2, 18, text=name, font=self._font,
+                fill=ACCENT if i == self._index else TEXT_MUTED_SM,
+            )
+
+    def _click(self, event) -> None:
+        i = max(0, min(len(self._names) - 1, int((event.x - 4) // self._seg)))
+        if i != self._index:
+            self.select(i)
+            self._on_change(i)
+
+    def select(self, index: int) -> None:
+        self._index = index
+        self._draw()
+
+
+class _Carousel(tk.Canvas):
+    """Big picture of the grid with ‹ › to flip through the list (mouse wheel works too)."""
+
+    def __init__(self, parent, width, height, on_view) -> None:
+        super().__init__(parent, width=width, height=height, bg=BG, highlightthickness=0, bd=0)
+        self._w_px, self._h_px = width, height
+        self._on_view = on_view
+        self._names: list[str] = []
+        self._selected = ""
+        self._index = 0
+        self._cache: dict[str, ImageTk.PhotoImage] = {}
+        self._placeholder = _rounded(width, height, 16, "#0a0f11")
+        self._arrow = {False: _rounded(34, 34, 17, "#0b0b0d"), True: _rounded(34, 34, 17, "#26262b")}
+        self.bind("<MouseWheel>", lambda e: self.flip(-1 if e.delta > 0 else 1))
+
+    def _image(self, name: str) -> ImageTk.PhotoImage:
+        cached = self._cache.get(name)
+        if cached is not None:
+            return cached
+        photo = self._placeholder
+        path = grid_manager.preview_path(name)
+        if path is not None:
+            try:
+                src = Image.open(path).convert("RGB")
+                scale = max(self._w_px / src.width, self._h_px / src.height)
+                src = src.resize((max(1, round(src.width * scale)), max(1, round(src.height * scale))), Image.Resampling.LANCZOS)
+                left, top = (src.width - self._w_px) // 2, (src.height - self._h_px) // 2
+                crop = src.crop((left, top, left + self._w_px, top + self._h_px))
+                s = 4
+                mask = Image.new("L", (self._w_px * s, self._h_px * s), 0)
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, self._w_px * s - 1, self._h_px * s - 1), radius=16 * s, fill=255)
+                mask = mask.resize((self._w_px, self._h_px), Image.Resampling.LANCZOS)
+                canvas = Image.new("RGB", (self._w_px, self._h_px), _rgb(BG))
+                canvas.paste(crop, (0, 0), mask)
+                photo = ImageTk.PhotoImage(canvas)
+            except Exception:
+                photo = self._placeholder
+        self._cache[name] = photo
+        return photo
+
+    def set(self, names: list[str], selected: str) -> None:
+        current = self.current()
+        self._names, self._selected = names, selected
+        if selected in names and (not current or current not in names):
+            self._index = names.index(selected)
+        elif current in names:
+            self._index = names.index(current)
+        else:
+            self._index = 0
+        self._render()
+
+    def current(self) -> str:
+        return self._names[self._index] if self._names else ""
+
+    def flip(self, step: int) -> None:
+        if not self._names:
+            return
+        self._index = (self._index + step) % len(self._names)
+        self._render()
+
+    def _render(self) -> None:
+        self.delete("all")
+        name = self.current()
+        if name:
+            self.create_image(0, 0, image=self._image(name), anchor="nw")
+        cy = self._h_px // 2
+        for tag, x, glyph, step in (("prev", 10, "‹", -1), ("next", self._w_px - 44, "›", 1)):
+            item = self.create_image(x, cy - 17, image=self._arrow[False], anchor="nw", tags=(tag,))
+            self.create_text(x + 17, cy - 2, text=glyph, fill=TEXT, font=("Segoe UI", 16), tags=(tag,))
+            self.tag_bind(tag, "<Button-1>", lambda _e, st=step: self.flip(st))
+            self.tag_bind(tag, "<Enter>", lambda _e, it=item: (self.itemconfigure(it, image=self._arrow[True]), self.configure(cursor="hand2")))
+            self.tag_bind(tag, "<Leave>", lambda _e, it=item: (self.itemconfigure(it, image=self._arrow[False]), self.configure(cursor="")))
+        self._on_view(name, self._index, len(self._names))
+
+
 class _EntryCard(tk.Canvas):
     """Card with a caption and a single-line text field (commits on Enter / focus out)."""
 
@@ -264,8 +416,8 @@ class _EntryCard(tk.Canvas):
     ) -> None:
         super().__init__(parent, width=width, height=68, bg=BG, highlightthickness=0, bd=0)
         self._on_commit = on_commit
-        self._bg_img = _rounded(width, 68, RADIUS, BG_CARD, LINE)
-        self._field_img = _rounded(width - 20, 28, RADIUS_SM, BG_INPUT, LINE, bg=BG_CARD)
+        self._bg_img = _rounded(width, 68, RADIUS, BG_CARD)
+        self._field_img = _rounded(width - 20, 28, RADIUS_SM, BG_INPUT, bg=BG_CARD)
         self.create_image(0, 0, image=self._bg_img, anchor="nw")
         self.create_text(14, 17, text=label.upper(), anchor="w", fill=TEXT_MUTED_SM, font=(mono, 8))
         self.create_image(10, 30, image=self._field_img, anchor="nw")
@@ -332,8 +484,19 @@ class AppWindow:
         on_close: Callable[[], None],
         on_minimize: Callable[[], None],
         on_update: Callable[[], None] | None = None,
+        on_pick_grid: Callable[[str], None] | None = None,
+        on_add_grid: Callable[[str], None] | None = None,
+        on_delete_grid: Callable[[str], None] | None = None,
+        on_launch_dota: Callable[[], None] | None = None,
     ) -> None:
+        self._on_launch_dota = on_launch_dota or (lambda: None)
+        self._on_pick_grid = on_pick_grid or (lambda _n: None)
+        self._on_add_grid = on_add_grid or (lambda _p: None)
+        self._on_delete_grid = on_delete_grid or (lambda _n: None)
         self._on_update = on_update
+        self._status_text = ""
+        self._dragging = False
+        self._idle_text = ""
         self._update_btn: tk.Label | None = None
         self._update_pulse = 0
         self._on_toggle_auto = on_toggle_auto
@@ -356,7 +519,9 @@ class AppWindow:
         self.root.geometry(f"{WIDTH}x{HEIGHT}")
         self.root.resizable(False, False)
         self.root.overrideredirect(True)
+        self.root.attributes("-transparentcolor", BG)
         self.root.after(50, lambda: hide_from_taskbar(self.root))
+        self.root.after(120, lambda: enable_glass(self.root, 0x0F0F0F, 0x90))
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         families = set(tkfont.families(self.root))
@@ -379,66 +544,113 @@ class AppWindow:
     # ---- layout -----------------------------------------------------------
 
     def _build_titlebar(self, parent: tk.Frame) -> None:
-        bar = tk.Frame(parent, bg=BG, height=40)
+        bar = tk.Frame(parent, bg=BAR_BG, height=40)
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        self._logo_label = tk.Label(bar, bg=BG, bd=0, image=self._logo_on)
+        self._logo_label = tk.Label(bar, bg=BAR_BG, bd=0, image=self._logo_on)
         self._logo_label.pack(side="left", padx=(PAD, 8))
-        title = tk.Label(bar, text="// largo auto config", bg=BG, fg=TEXT_MUTED_SM, font=(self._mono, 9), anchor="w")
+        title = tk.Label(bar, text="largo auto config", bg=BAR_BG, fg=TEXT_MUTED_SM, font=(self._mono, 9), anchor="w")
         title.pack(side="left")
+        ver = tk.Label(bar, text=f"v{version.APP_VERSION}", bg=BAR_BG, fg="#4a4a50", font=(self._mono, 8), anchor="w")
+        ver.pack(side="left", padx=(8, 0))
 
         for w in (bar, self._logo_label, title):
             w.bind("<ButtonPress-1>", self._start_drag)
             w.bind("<B1-Motion>", self._on_drag)
+            w.bind("<ButtonRelease-1>", self._end_drag)
 
-        controls = tk.Frame(bar, bg=BG)
+        controls = tk.Frame(bar, bg=BAR_BG)
         controls.pack(side="right")
         self._mk_win_btn(controls, "—", self._on_minimize).pack(side="left")
         self._mk_win_btn(controls, "×", self._on_close, close=True).pack(side="left")
         # значок обновления: появляется, когда на GitHub вышла новая версия
-        self._update_btn = tk.Label(bar, text="↑", bg=BG, fg=ACCENT, font=("Segoe UI Semibold", 12), cursor="hand2", padx=10)
+        self._update_btn = tk.Label(bar, text="↑", bg=BAR_BG, fg=ACCENT, font=("Segoe UI Semibold", 12), cursor="hand2", padx=10)
         self._update_btn.bind("<Button-1>", lambda _e: self._on_update and self._on_update())
         self._update_tip = HoverTip(self._update_btn, "Доступно обновление")
         tk.Frame(parent, bg=LINE, height=1).pack(fill="x")
 
     def _mk_win_btn(self, parent: tk.Frame, text: str, command, close: bool = False) -> tk.Label:
-        btn = tk.Label(parent, text=text, bg=BG, fg=TEXT_DIM, width=4, font=("Segoe UI", 11), cursor="hand2")
+        btn = tk.Label(parent, text=text, bg=BAR_BG, fg=TEXT_DIM, width=4, font=("Segoe UI", 11), cursor="hand2")
         btn.bind("<Enter>", lambda _e: btn.configure(bg=CLOSE_HOVER if close else BG_RAISED, fg="#ffffff"))
-        btn.bind("<Leave>", lambda _e: btn.configure(bg=BG, fg=TEXT_DIM))
+        btn.bind("<Leave>", lambda _e: btn.configure(bg=BAR_BG, fg=TEXT_DIM))
         btn.bind("<Button-1>", lambda _e: command())
         return btn
 
     def _build_body(self, parent: tk.Frame) -> None:
-        # status goes first with side="bottom" so it keeps its space
-        self.status_var = tk.StringVar(value="")
-        self._status = tk.Label(
-            parent, textvariable=self.status_var, bg=BG, fg=TEXT_MUTED_SM, font=(self._mono, 9), anchor="w"
-        )
-        self._status.pack(side="bottom", fill="x", padx=PAD, pady=(0, 12))
-
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, padx=PAD, pady=(14, 0))
         inner_w = WIDTH - 2 * PAD - 2
 
-        self._account_card = _Card(body, inner_w, "Аккаунт", self._mono)
-        self._account_card.pack(pady=(0, 8))
-        self._master_card = _Card(body, inner_w, "Главный аккаунт", self._mono)
-        self._master_card.pack(pady=(0, 8))
-        self._toggle = _ToggleCard(body, inner_w, "Автозамена", self._toggle_auto, self._sans)
-        self._toggle.pack(pady=(0, 8))
-        self._autostart_toggle = _ToggleCard(
-            body, inner_w, "Автозапуск с Windows", self._toggle_autostart, self._sans
+        # bottom bar first (side="bottom") so it always keeps its space: status on the left, launch on the right
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(side="bottom", fill="x", padx=PAD, pady=(0, 14))
+        launch_btn = _Pill(
+            bar, "▶  Запуск Dota", self._on_launch_dota, (self._sans, 10, "bold"), width=150, height=40,
+            fill=ACCENT, hover="#b9a4fa", fg="#17122b", fg_hover="#17122b",
         )
-        self._autostart_toggle.pack(pady=(0, 8))
+        launch_btn.pack(side="right")
+        HoverTip(launch_btn, "Сначала применит всё выбранное к текущему аккаунту, потом запустит Dota 2 через Steam.")
+        self.status_var = tk.StringVar(value="")
+        self._status = tk.Label(
+            bar, textvariable=self.status_var, bg=BG, fg=TEXT_MUTED_SM, font=(self._mono, 9),
+            anchor="w", justify="left", wraplength=inner_w - 170,
+        )
+        self._status.pack(side="left", fill="x", expand=True)
+
+        self._tabs = _Tabs(parent, inner_w, ["Главное", "Сетки героев", "Запуск"], self._show_tab, (self._sans, 9, "bold"))
+        self._tabs.pack(padx=PAD, pady=(12, 0))
+        holder = tk.Frame(parent, bg=BG)
+        holder.pack(fill="both", expand=True, padx=PAD, pady=(12, 0))
+        self._tab_frames = [tk.Frame(holder, bg=BG) for _ in range(3)]
+
+        # --- Главное
+        main = self._tab_frames[0]
+        self._account_card = _Card(main, inner_w, "Аккаунт", self._mono)
+        self._account_card.pack(pady=(0, 8))
+        self._master_card = _Card(main, inner_w, "Главный аккаунт", self._mono)
+        self._master_card.pack(pady=(0, 8))
+        self._toggle = _ToggleCard(main, inner_w, "Автозамена", self._toggle_auto, self._sans)
+        self._toggle.pack(pady=(0, 8))
+        self._autostart_toggle = _ToggleCard(main, inner_w, "Автозапуск с Windows", self._toggle_autostart, self._sans)
+        self._autostart_toggle.pack(pady=(0, 12))
+        master_btn = _Button(main, "Сделать главным", self._on_set_master, (self._sans, 9, "bold"), primary=True)
+        master_btn.pack(anchor="w")
+        HoverTip(
+            master_btn,
+            "Войди в аккаунт с нужными хоткеями и настройками и нажми сюда. "
+            "На остальных аккаунтах они подставятся сами.",
+        )
+
+        # --- Сетки героев
+        grids = self._tab_frames[1]
+        self._carousel = _Carousel(grids, inner_w, 214, self._on_grid_view)
+        self._carousel.pack()
+        info = tk.Frame(grids, bg=BG)
+        info.pack(fill="x", pady=(10, 0))
+        self._grid_name = tk.Label(info, text="", bg=BG, fg=TEXT, font=(self._sans, 12, "bold"), anchor="w")
+        self._grid_name.pack(side="left")
+        self._grid_count = tk.Label(info, text="", bg=BG, fg=TEXT_MUTED, font=(self._mono, 9))
+        self._grid_count.pack(side="right")
+        row = tk.Frame(grids, bg=BG)
+        row.pack(fill="x", pady=(10, 0))
+        self._grid_select = _Pill(row, "Выбрать", self._toggle_grid, (self._sans, 9, "bold"), width=132, height=32)
+        self._grid_select.pack(side="left")
+        HoverTip(
+            self._grid_select,
+            "Выбранная сетка подставится на каждый аккаунт, а героев, которых ты в ней расставишь, "
+            "приложение запомнит и перенесёт дальше. Нажми ещё раз на выбранную, чтобы снять выбор.",
+        )
+        _Pill(row, "+ Добавить свою", self._pick_grid_file, (self._sans, 9), width=130, height=32).pack(side="left", padx=(8, 0))
+        self._grid_remove = _Pill(row, "Убрать", self._remove_grid, (self._sans, 9), width=78, height=32)
+        self._grid_remove.pack(side="right")
+
+        # --- Запуск
+        run = self._tab_frames[2]
         self._autoexec_card = _FileCard(
-            body, inner_w, "Autoexec CFG", self._pick_autoexec, self._on_clear_autoexec, self._sans, self._mono
+            run, inner_w, "Autoexec CFG", self._pick_autoexec, self._on_clear_autoexec, self._sans, self._mono
         )
         self._autoexec_card.pack(pady=(0, 8))
-        self._launch_card = _EntryCard(
-            body, inner_w, "Параметры запуска Dota", self._on_launch_options, self._mono
-        )
-        self._launch_card.pack(pady=(0, 14))
+        self._launch_card = _EntryCard(run, inner_w, "Параметры запуска Dota", self._on_launch_options, self._mono)
+        self._launch_card.pack(pady=(0, 12))
         HoverTip(
             self._launch_card,
             "Параметры запуска Dota 2 из Steam (-novid, -console, +exec ...). "
@@ -450,27 +662,63 @@ class AppWindow:
             "Нажми или перетащи сюда свой autoexec .cfg. Он будет записываться в Dota "
             "при каждом запуске приложения и смене аккаунта. Правая кнопка мыши — убрать.",
         )
+        _Button(run, "Применить сейчас", self._on_apply, (self._sans, 9), primary=False).pack(anchor="w")
 
-        actions = tk.Frame(body, bg=BG)
-        actions.pack(fill="x")
-        master_btn = _Button(actions, "Сделать главным", self._on_set_master, (self._sans, 9, "bold"), primary=True)
-        master_btn.pack(side="left")
-        HoverTip(
-            master_btn,
-            "Войди в аккаунт с нужными хоткеями и настройками и нажми сюда. "
-            "На остальных аккаунтах они подставятся сами.",
-        )
-        _Button(actions, "Применить сейчас", self._on_apply, (self._sans, 9), primary=False).pack(
-            side="left", padx=(8, 0)
-        )
+        self._show_tab(0)
+
+    def _show_tab(self, index: int) -> None:
+        for i, frame in enumerate(self._tab_frames):
+            if i == index:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+        self._tabs.select(index)
+
+    # ---- hero grids tab ----------------------------------------------------
+
+    def _on_grid_view(self, name: str, index: int, total: int) -> None:
+        """The carousel shows another grid: update name, counter and the buttons."""
+        self._grid_name.configure(text=name or "Сеток пока нет")
+        self._grid_count.configure(text=f"{index + 1} из {total}" if total else "")
+        chosen = bool(name) and name == getattr(self._carousel, "_selected", "")
+        if chosen:
+            self._grid_select.set_text("Выбрана  ✓")
+            self._grid_select.style("#2b2547", "#352c58", ACCENT, ACCENT)
+        else:
+            self._grid_select.set_text("Выбрать")
+            self._grid_select.style(ACCENT, "#b9a4fa", "#17122b", "#17122b")
+        if name and grid_manager.is_removable(name):
+            self._grid_remove.set_text("Убрать" if not grid_manager.is_bundled(name) else "Сбросить")
+            self._grid_remove.pack(side="right")
+        else:
+            self._grid_remove.pack_forget()
+
+    def _toggle_grid(self) -> None:
+        name = self._carousel.current()
+        if name:
+            self._on_pick_grid("" if name == self._carousel._selected else name)
+
+    def _remove_grid(self) -> None:
+        name = self._carousel.current()
+        if name:
+            self._on_delete_grid(name)
 
     # ---- drag / actions ----------------------------------------------------
 
+    def _end_drag(self, _event) -> None:
+        if self._dragging:
+            self._dragging = False
+            enable_glass(self.root, 0x0F0F0F, 0x90)
+
     def _start_drag(self, event) -> None:
-        self._drag_x = event.x_root - self.root.winfo_x()
-        self._drag_y = event.y_root - self.root.winfo_y()
+        ox, oy = window_origin(self.root)
+        self._drag_x = event.x_root - ox
+        self._drag_y = event.y_root - oy
 
     def _on_drag(self, event) -> None:
+        if not self._dragging:  # a plain click must not change the look; blur only goes off while moving
+            self._dragging = True
+            enable_glass(self.root, 0x0F0F0F, 0xC8, blur=False)
         self.root.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
 
     def _toggle_auto(self) -> None:
@@ -483,6 +731,14 @@ class AppWindow:
         )
         if path:
             self._on_pick_autoexec(path)
+
+    def _pick_grid_file(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Файл сетки героев (hero_grid_config.json)",
+            filetypes=[("Сетка героев", "*.json"), ("Все файлы", "*.*")],
+        )
+        if path:
+            self._on_add_grid(path)
 
     def _on_drop_files(self, files) -> None:
         for raw in files or []:
@@ -497,9 +753,12 @@ class AppWindow:
                     continue
             path = Path(str(raw))
             if path.is_file():
-                self._on_pick_autoexec(str(path))
+                if path.suffix.lower() == ".json":
+                    self._on_add_grid(str(path))
+                else:
+                    self._on_pick_autoexec(str(path))
                 return
-        self.set_status("перетащи файл .cfg", ok=False)
+        self.set_status("перетащи файл .cfg или сетку .json", ok=False)
 
     def _toggle_autostart(self) -> None:
         self.set_autostart(not self._autostart)
@@ -525,7 +784,7 @@ class AppWindow:
         if btn is None or not btn.winfo_ismapped():
             return
         self._update_pulse = (self._update_pulse + 1) % 2
-        btn.configure(fg=ACCENT if self._update_pulse else "#3f8f6c")
+        btn.configure(fg=ACCENT if self._update_pulse else "#6a58b0")
         btn.after(900, self._pulse_update)
 
     def set_account(self, name: str, account_id: str = "") -> None:
@@ -534,8 +793,15 @@ class AppWindow:
     def set_master(self, name: str = "") -> None:
         self._master_card.set(name or "не выбран", ACCENT if name else LAMP_OFF)
 
+    def set_idle(self, text: str) -> None:
+        """What the status line says when nothing else is going on (update check result)."""
+        self._idle_text = text
+        if not self._status_text:
+            self.set_status("")
+
     def set_status(self, text: str, ok: bool = True) -> None:
-        self.status_var.set(f"// {text}" if text else "")
+        self._status_text = text
+        self.status_var.set(text or getattr(self, "_idle_text", ""))
         self._status.configure(fg=TEXT_MUTED_SM if ok else DANGER)
 
     def set_auto(self, enabled: bool) -> None:
@@ -549,6 +815,10 @@ class AppWindow:
 
     def set_launch_options(self, text: str) -> None:
         self._launch_card.set(text)
+
+    def set_grids(self, names: list[str], selected: str) -> None:
+        self._carousel._cache.pop("", None)
+        self._carousel.set(names, selected)
 
     def set_autoexec(self, name: str) -> None:
         self._autoexec_card.set(name)
