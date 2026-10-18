@@ -202,6 +202,11 @@ class App:
                     int(info.get("size") or 0),
                     on_progress=lambda done, total: self.window.after(0, lambda: self._show_download(info.get("latest"), done, total)),
                 )
+                # Полоса дошла до конца: держим окно открытым ещё полторы секунды, потом закрываем и обновляем
+                self.window.after(0, lambda: self.window.set_progress(1.0))
+                import time
+
+                time.sleep(1.5)
                 updater.stage_restart(path)
             except Exception as exc:
                 self._updating = False
