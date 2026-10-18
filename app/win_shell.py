@@ -215,3 +215,71 @@ def stop_activate_watcher() -> None:
         except OSError:
             pass
         _IPC_SOCK = None
+
+
+# ---- Прогресс на кнопке в панели задач (ITaskbarList3) -----------------------------------------------------------
+
+_TBPF_NOPROGRESS = 0
+_TBPF_INDETERMINATE = 1
+_TBPF_NORMAL = 2
+_TBPF_ERROR = 4
+
+
+def _taskbar_list():
+    """COM-объект ITaskbarList3 для текущего потока (None, если Windows его не дала)."""
+    import threading
+
+    cache = getattr(_taskbar_list, "cache", None)
+    if cache is None:
+        cache = _taskbar_list.cache = threading.local()
+    if getattr(cache, "ready", False):
+        return cache.obj
+    cache.ready = True
+    cache.obj = None
+    try:
+        class GUID(ctypes.Structure):
+            _fields_ = [("a", ctypes.c_ulong), ("b", ctypes.c_ushort), ("c", ctypes.c_ushort), ("d", ctypes.c_ubyte * 8)]
+
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitialize(None)
+        clsid, iid = GUID(), GUID()
+        ole32.CLSIDFromString("{56FDF344-FD6D-11d0-958A-006097C9A090}", ctypes.byref(clsid))
+        ole32.CLSIDFromString("{EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}", ctypes.byref(iid))
+        pointer = ctypes.c_void_p()
+        if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(pointer)) != 0 or not pointer.value:
+            return None
+        vtable = ctypes.cast(ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+        proto = ctypes.WINFUNCTYPE
+        hr_init = proto(ctypes.c_long, ctypes.c_void_p)(vtable[3])
+        set_value = proto(ctypes.c_long, ctypes.c_void_p, wintypes.HWND, ctypes.c_ulonglong, ctypes.c_ulonglong)(vtable[9])
+        set_state = proto(ctypes.c_long, ctypes.c_void_p, wintypes.HWND, ctypes.c_int)(vtable[10])
+        hr_init(pointer)
+        cache.obj = (pointer, set_value, set_state)
+    except Exception:
+        cache.obj = None
+    return cache.obj
+
+
+def window_handle(root) -> int:
+    return _hwnd_from_tk(root)
+
+
+def set_taskbar_progress(hwnd, done=None, total=None):
+    """Полоса загрузки на кнопке окна в панели задач. done=None — убрать, total=0 — «идёт, сколько неизвестно»."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    obj = _taskbar_list()
+    if obj is None:
+        return False
+    pointer, set_value, set_state = obj
+    try:
+        if done is None:
+            set_state(pointer, hwnd, _TBPF_NOPROGRESS)
+        elif not total:
+            set_state(pointer, hwnd, _TBPF_INDETERMINATE)
+        else:
+            set_state(pointer, hwnd, _TBPF_NORMAL)
+            set_value(pointer, hwnd, int(done), int(total))
+        return True
+    except Exception:
+        return False

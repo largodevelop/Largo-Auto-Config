@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 import grid_manager
 import version
-from win_shell import enable_glass, hide_from_taskbar, window_origin
+from win_shell import enable_glass, hide_from_taskbar, set_taskbar_progress, window_handle, window_origin
 
 # Design tokens (Largo CRM)
 BG = "#010101"  # colour key: Tk paints it, Windows makes it see-through glass (see win_shell.enable_glass)
@@ -568,7 +568,21 @@ class AppWindow:
         self._update_btn = tk.Label(bar, text="↑", bg=BAR_BG, fg=ACCENT, font=("Segoe UI Semibold", 12), cursor="hand2", padx=10)
         self._update_btn.bind("<Button-1>", lambda _e: self._on_update and self._on_update())
         self._update_tip = HoverTip(self._update_btn, "Доступно обновление")
-        tk.Frame(parent, bg=LINE, height=1).pack(fill="x")
+        # Тонкая линия под шапкой: она же полоса загрузки обновления
+        self._line = tk.Canvas(parent, height=2, bg=LINE, highlightthickness=0, bd=0)
+        self._line.pack(fill="x")
+
+    def set_progress(self, fraction) -> None:
+        """Полоса загрузки обновления: линия под шапкой и кнопка в панели задач. None — убрать."""
+        line = self._line
+        line.delete("all")
+        if fraction is not None:
+            width = max(1, line.winfo_width())
+            line.create_rectangle(0, 0, int(width * max(0.0, min(1.0, fraction))), 2, fill=ACCENT, width=0)
+        try:
+            set_taskbar_progress(window_handle(self.root), None if fraction is None else int(fraction * 1000), None if fraction is None else 1000)
+        except Exception:
+            pass
 
     def _mk_win_btn(self, parent: tk.Frame, text: str, command, close: bool = False) -> tk.Label:
         btn = tk.Label(parent, text=text, bg=BAR_BG, fg=TEXT_DIM, width=4, font=("Segoe UI", 11), cursor="hand2")

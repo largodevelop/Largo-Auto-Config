@@ -200,18 +200,27 @@ class App:
                     info["url"],
                     updater.staged_path(),
                     int(info.get("size") or 0),
-                    on_progress=lambda done, total: self.window.after(
-                        0, lambda: self._say(f"скачиваю {info.get('latest')}: {int(done * 100 / total) if total else 0}%")
-                    ),
+                    on_progress=lambda done, total: self.window.after(0, lambda: self._show_download(info.get("latest"), done, total)),
                 )
                 updater.stage_restart(path)
             except Exception as exc:
                 self._updating = False
+                self.window.after(0, lambda: self.window.set_progress(None))
                 self.window.after(0, lambda: self._say(f"обновление не удалось: {exc}", ok=False))
                 return
             self.window.after(0, self.quit)
 
         threading.Thread(target=work, name="largo-install-update", daemon=True).start()
+
+    def _show_download(self, latest, done, total) -> None:
+        percent = int(done * 100 / total) if total else 0
+        self._say(f"скачиваю {latest}: {percent}%")
+        self.window.set_progress(done / total if total else None)
+        if self._tray:
+            try:
+                self._tray.title = f"{APP_NAME}: обновление {percent}%"
+            except Exception:
+                pass
 
     def quit(self) -> None:
         self._harvest_grid(self._account)

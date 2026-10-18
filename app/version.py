@@ -1,5 +1,5 @@
 """App version and the GitHub repo used for auto-updates."""
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 UPDATE_REPO = "largodevelop/Largo-Auto-Config"
 UPDATE_ASSET_NAME = "LargoAutoConfig.exe"
