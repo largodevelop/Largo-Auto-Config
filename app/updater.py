@@ -141,32 +141,8 @@ def _wait_pid_exit(pid: int, timeout: float) -> None:
 
 class _Splash:
     def __init__(self) -> None:
+        # Окна нет: плашка поверх всех окон мешала играющему пользователю. Обновление идёт в фоне.
         self.root = None
-        try:
-            import tkinter as tk
-            from tkinter import ttk
-
-            root = tk.Tk()
-            root.overrideredirect(True)
-            root.attributes("-topmost", True)
-            width, height = 340, 110
-            root.geometry(f"{width}x{height}+{(root.winfo_screenwidth() - width) // 2}+{(root.winfo_screenheight() - height) // 2}")
-            root.configure(bg="#18181b")
-            tk.Label(root, text="Largo Auto Config", bg="#18181b", fg="#f4f4f5", font=("Segoe UI Semibold", 12)).pack(pady=(20, 2))
-            tk.Label(root, text="Устанавливаю обновление…", bg="#18181b", fg="#a1a1aa", font=("Segoe UI", 9)).pack()
-            style = ttk.Style(root)
-            try:
-                style.theme_use("clam")
-            except tk.TclError:
-                pass
-            style.configure("L.Horizontal.TProgressbar", troughcolor="#2a2a2e", background="#a58cf8", bordercolor="#18181b", lightcolor="#a58cf8", darkcolor="#a58cf8")
-            bar = ttk.Progressbar(root, style="L.Horizontal.TProgressbar", mode="indeterminate", length=260)
-            bar.pack(pady=12)
-            bar.start(18)
-            root.update()
-            self.root = root
-        except Exception:
-            self.root = None
 
     def pump(self, seconds: float) -> None:
         end = time.time() + seconds
